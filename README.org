@@ -1,0 +1,21 @@
+#+title:     Jenkins Plugin Graph
+#+author:    Logan Barnett
+#+email:     logustus@gmail.com
+#+date:      <2025-05-12 Mon>
+#+language:  en
+#+file_tags:
+#+tags:
+
+Here be dragons - this is very much a work in progress.
+
+Take a series of plugins and versions, and print out a Hiera-compatible list of
+plugins and versions to use, with all transitive dependencies resolved.
+Intended to be used with the Jenkins Puppet module.
+
+Rough steps involved in the implementation:
+
+1. Read in input YAML file.
+2. Gather metadata from plugins.
+   1. Resolve dependencies.
+   2. Recurse.
+3. Print results.
