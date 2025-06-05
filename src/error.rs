@@ -1,4 +1,6 @@
-#[derive(Debug)]
+use strum_macros::Display;
+
+#[derive(Debug, Display)]
 pub enum AppError {
   CachedManifestReadWarning(std::io::Error),
   CachedManifestMissingWarning(),
@@ -13,6 +15,6 @@ pub enum AppError {
   PackageUnzipError(zip::result::ZipError, String, String),
   PackageManifestSeekError(zip::result::ZipError, String, String),
   RemotePluginDeserializeError(String),
-  VersionParseError(semver::Error),
+  VersionParseError(),
   YamlSerializationError(serde_yaml::Error),
 }

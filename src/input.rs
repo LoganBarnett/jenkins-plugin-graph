@@ -1,7 +1,6 @@
-use crate::{cli::Cli, error::AppError};
+use crate::{cli::Cli, error::AppError, jenkins_plugin_version::JenkinsPluginVersion};
 use log::*;
 use reqwest::blocking;
-use semver::Version;
 use std::{collections::HashMap, fs::File, io::{Cursor, Read}};
 use serde::{Deserialize, Serialize};
 use cached::proc_macro::cached;
@@ -18,7 +17,7 @@ pub struct Input {
 #[derive(Clone, Debug, Deserialize)]
 pub struct InputPackage {
   // TODO: Consider making this a constraint.
-  pub version: Version,
+  pub version: JenkinsPluginVersion,
 }
 
 // #[derive(Clone, Debug, Deserialize)]
@@ -46,7 +45,7 @@ pub struct InputPackage {
 // doesn't include its dependencies and thus is incomplete.
 pub struct ResolvedPackage {
   pub name: String,
-  pub version: Version,
+  pub version: JenkinsPluginVersion,
 }
 
 // A satisfied package is a package that has been completely resolved as well as
@@ -54,14 +53,14 @@ pub struct ResolvedPackage {
 #[derive(Clone, Debug)]
 pub struct SatisfiedPackage {
   pub name: String,
-  pub version: Version,
+  pub version: JenkinsPluginVersion,
   pub dependencies: Vec<SatisfiedPackage>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FlatPackage {
   pub name: String,
-  pub version: Version,
+  pub version: JenkinsPluginVersion,
 }
 
 impl SatisfiedPackage {
@@ -88,7 +87,7 @@ impl SatisfiedPackage {
 pub fn dependency_http(
   cache_dir: String,
   name: String,
-  version: Version,
+  version: JenkinsPluginVersion,
 ) -> Result<String, AppError> {
   let url = format!(
     "https://get.jenkins.io/plugins/{}/{}/{}.hpi",
@@ -180,7 +179,7 @@ pub fn dependency_http(
 pub fn cached_manifest(
   cache_dir: String,
   name: String,
-  version: Version,
+  version: JenkinsPluginVersion,
 ) -> Result<String, AppError> {
   let path = format!("{}/{}--{}.mf", cache_dir, name, version);
   if std::fs::exists(&path).unwrap() {
@@ -205,7 +204,7 @@ pub fn dependency(
   specified: &Vec<ResolvedPackage>,
   cache_dir: String,
   name: String,
-  version: &Version,
+  version: &JenkinsPluginVersion,
 ) -> Result<SatisfiedPackage, AppError> {
   let real_version = specified
     .into_iter()
@@ -302,6 +301,6 @@ fn from_name_version_string(plugin_pair: &str) -> Result<ResolvedPackage, AppErr
     ;
   Ok(ResolvedPackage {
     name: name.to_string(),
-    version: Version::parse(version).map_err(AppError::VersionParseError)?,
+    version: JenkinsPluginVersion::parse(&version.to_string())?,
   })
 }

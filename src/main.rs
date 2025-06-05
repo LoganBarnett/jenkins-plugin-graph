@@ -75,7 +75,6 @@ fn main() -> Result<(), AppError> {
       cli.cache_dir
     },
   };
-  // std::fs::
   let path = "input.yaml";
   let input: Input = serde_yaml::from_reader(
     BufReader::new(

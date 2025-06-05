@@ -29,6 +29,8 @@ serde_json = "1.0.140"
 serde_yaml = "0.9.34"
 # Send our logs to stderr to unclutter stdout's actual output.
 stderrlog = "0.6.0"
+# Allow us to display enums.
+strum_macros = "0.27.1"
 # Like inspect, but on everything.
 tap = "1.0.1"
 # Decompress the Jenkins Plugins files.
