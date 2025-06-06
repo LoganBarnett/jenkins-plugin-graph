@@ -130,7 +130,7 @@ fn main() -> Result<(), AppError> {
   );
 
   let resolved = resolve(
-    |a, b| a.version.cmp(&b.version),
+    |a, b| b.version.cmp(&a.version),
     grouped,
   );
 
