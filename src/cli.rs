@@ -16,5 +16,12 @@ pub struct Cli {
     help = "Cache directory to avoid HTTP trips.",
   )]
   pub cache_dir: String,
-  // pub jenkins_version: String,
+  // TODO: Document the structure somewhere.
+  #[arg(
+    env,
+    short,
+    long,
+    help = "A YAML file containing dependencies.",
+    )]
+  pub dependency_file: String,
 }

@@ -75,10 +75,9 @@ fn main() -> Result<(), AppError> {
       cli.cache_dir
     },
   };
-  let path = "input.yaml";
   let input: Input = serde_yaml::from_reader(
     BufReader::new(
-      std::fs::File::open(path)
+      std::fs::File::open(&cli.dependency_file)
         .map_err(AppError::InputFileOpenError)
         ?
     )
@@ -135,7 +134,9 @@ fn main() -> Result<(), AppError> {
     grouped,
   );
 
-  let yaml = serde_yaml::to_string(&resolved)
+  let mut output_helper = HashMap::new();
+  output_helper.insert("jenkins::plugin_hash", &resolved);
+  let yaml = serde_yaml::to_string(&output_helper)
     .map_err(AppError::YamlSerializationError)
     ?;
   println!("{}", yaml);
