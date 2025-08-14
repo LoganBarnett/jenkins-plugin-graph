@@ -1,6 +1,8 @@
 use crate::{cli::Cli, error::AppError, jenkins_plugin_version::JenkinsPluginVersion};
+use bytes::Bytes;
 use log::*;
 use reqwest::blocking;
+use sha2::{Digest, Sha256};
 use std::{collections::HashMap, fs::File, io::{Cursor, Read}};
 use serde::{Deserialize, Serialize};
 use cached::proc_macro::cached;
@@ -55,12 +57,17 @@ pub struct SatisfiedPackage {
   pub name: String,
   pub version: JenkinsPluginVersion,
   pub dependencies: Vec<SatisfiedPackage>,
+  pub digest_string: String,
+  pub digest_type: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FlatPackage {
   pub name: String,
   pub version: JenkinsPluginVersion,
+  pub digest_string: String,
+  pub digest_type: String,
+  pub pin: bool,
 }
 
 impl SatisfiedPackage {
@@ -76,10 +83,65 @@ impl SatisfiedPackage {
     packages.push(FlatPackage {
       name: self.name.clone(),
       version: self.version.clone(),
+      digest_string: self.digest_string.clone(),
+      digest_type: self.digest_type.clone(),
+      pin: true,
     });
     packages
   }
 
+}
+
+fn archive_cache_path(
+  cache_dir: &String,
+  name: &String,
+  version: &JenkinsPluginVersion,
+) -> String {
+  format!("{}/{}--{}.hpi", cache_dir, name, version)
+}
+
+fn archive_hash_file(
+  cache_dir: &String,
+  name: &String,
+  version: &JenkinsPluginVersion,
+) -> Result<(String, String), AppError> {
+  let archive_path = archive_cache_path(&cache_dir, &name, &version);
+  let mut file = File::open(&archive_path)
+    .map_err(|e| AppError::PluginHashFileReadError(archive_path.clone(), e) )
+    ?;
+  let mut buffer = Vec::new();
+  file.read_to_end(&mut buffer)
+    .map_err(|e| AppError::PluginHashFileReadError(archive_path.clone(), e) )
+    ?;
+  archive_hash_bytes(&buffer.into())
+}
+
+fn archive_hash_bytes(
+  buffer: &Bytes,
+) -> Result<(String, String), AppError> {
+  let mut hasher = Sha256::new();
+  hasher.update(&buffer);
+  let digest = hasher.finalize();
+  Ok((format!("{:x}", digest), "sha256".to_string()))
+}
+
+fn archive_write(
+  cache_dir: &String,
+  name: &String,
+  version: &JenkinsPluginVersion,
+  bytes: &Bytes,
+) -> Result<(), AppError> {
+  let archive_path = archive_cache_path(&&cache_dir, name, &version);
+  let mut file = File::create(&archive_path)
+    .map_err(|e| {
+      AppError::PluginArchiveWriteError(archive_path.clone(), e)
+    })?;
+  file.write_all(&bytes)
+    .map_err(|e| {
+      AppError::PluginArchiveWriteError(archive_path.clone(), e)
+    })?;
+  info!("Wrote archive to: {}", archive_path);
+  Ok(())
 }
 
 // TODO: Ugh I did all of this and only later found there's a DiskCache in
@@ -111,6 +173,9 @@ pub fn dependency_http(
       version.to_string(),
     ))
     ?;
+  // Bytes::clone doesn't actually make a copy but clones a reference.  You want
+  // to_vec for strict copies, unintuitively.
+  archive_write(&cache_dir, &name, &version, &bytes.clone())?;
   let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
     .map_err(|e| AppError::PackageUnzipError(
       e,
@@ -181,12 +246,18 @@ pub fn cached_manifest(
   name: String,
   version: JenkinsPluginVersion,
 ) -> Result<String, AppError> {
-  let path = format!("{}/{}--{}.mf", cache_dir, name, version);
-  if std::fs::exists(&path).unwrap() {
-    std::fs::read_to_string(&path)
-    .map_err(AppError::CachedManifestReadWarning)
+  let manifest_path = format!("{}/{}--{}.mf", cache_dir, name, version);
+  let archive_path = archive_cache_path(&cache_dir, &name, &version);
+  if std::fs::exists(&manifest_path).unwrap() {
+    if std::fs::exists(&archive_path).unwrap() {
+      std::fs::read_to_string(&manifest_path)
+        .inspect(|_| info!("Found {} in cache.", manifest_path))
+        .map_err(AppError::CachedManifestReadWarning)
+    } else {
+      warn!("Manifest is present, but {} archive is missing.", archive_path);
+      Err(AppError::CachedArchiveMissingWarning())
+    }
   } else {
-    // Perhaps an abuse of flow control.
     Err(AppError::CachedManifestMissingWarning())
   }
 }
@@ -232,10 +303,17 @@ pub fn dependency(
         })
         .collect()
     })?;
+  let (digest_string, digest_type) = archive_hash_file(
+    &cache_dir,
+    &name,
+    &real_version,
+  )?;
   Ok(SatisfiedPackage {
     name,
     version: real_version,
     dependencies,
+    digest_string,
+    digest_type,
   })
 }
 
