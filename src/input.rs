@@ -61,6 +61,14 @@ pub struct SatisfiedPackage {
   pub digest_type: String,
 }
 
+impl Eq for SatisfiedPackage {}
+
+impl PartialEq for SatisfiedPackage {
+  fn eq(&self, other: &Self) -> bool {
+    self.name == other.name
+  }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct FlatPackage {
   pub name: String,
@@ -68,6 +76,26 @@ pub struct FlatPackage {
   pub digest_string: String,
   pub digest_type: String,
   pub pin: bool,
+}
+
+impl PartialEq for FlatPackage {
+  fn eq(&self, other: &Self) -> bool {
+    self.name == other.name
+  }
+}
+
+impl Eq for FlatPackage {}
+
+impl Ord for FlatPackage {
+  fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    self.name.cmp(&other.name)
+  }
+}
+
+impl PartialOrd for FlatPackage {
+  fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    Some(self.cmp(other))
+  }
 }
 
 impl SatisfiedPackage {
@@ -87,6 +115,7 @@ impl SatisfiedPackage {
       digest_type: self.digest_type.clone(),
       pin: true,
     });
+    packages.sort_by(|a, b| a.name.cmp(&b.name));
     packages
   }
 
@@ -140,7 +169,7 @@ fn archive_write(
     .map_err(|e| {
       AppError::PluginArchiveWriteError(archive_path.clone(), e)
     })?;
-  info!("Wrote archive to: {}", archive_path);
+  debug!("Wrote archive to: {}", archive_path);
   Ok(())
 }
 
@@ -157,7 +186,7 @@ pub fn dependency_http(
     version,
     name,
   );
-  info!("Trying url: {}", url);
+  debug!("Trying url: {}", url);
   let response = blocking::get(url)
     .map_err(|e| AppError::PackageGetCallError(
       e.to_string(),
@@ -251,7 +280,7 @@ pub fn cached_manifest(
   if std::fs::exists(&manifest_path).unwrap() {
     if std::fs::exists(&archive_path).unwrap() {
       std::fs::read_to_string(&manifest_path)
-        .inspect(|_| info!("Found {} in cache.", manifest_path))
+        .inspect(|_| debug!("Found {} in cache.", manifest_path))
         .map_err(AppError::CachedManifestReadWarning)
     } else {
       warn!("Manifest is present, but {} archive is missing.", archive_path);

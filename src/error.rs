@@ -18,6 +18,6 @@ pub enum AppError {
   PluginArchiveWriteError(String, std::io::Error),
   PluginHashFileReadError(String, std::io::Error),
   RemotePluginDeserializeError(String),
-  VersionParseError(),
+  VersionParseError(String),
   YamlSerializationError(serde_yaml::Error),
 }

@@ -24,4 +24,11 @@ pub struct Cli {
     help = "A YAML file containing dependencies.",
     )]
   pub dependency_file: String,
+  #[arg(
+    short,
+    long,
+    help = "Print packages that are not dependencies of another package.",
+    default_value_t = false
+  )]
+  pub root_only: bool,
 }

@@ -1,10 +1,11 @@
+mod base_version;
 mod cli;
 mod error;
 mod input;
 mod logger;
 mod jenkins_plugin_version;
 
-use std::{cmp::Ordering, collections::HashMap, hash::Hash, io::BufReader};
+use std::{cmp::Ordering, collections::{BTreeMap, HashMap, HashSet}, hash::Hash, io::BufReader};
 
 use clap::Parser;
 use cli::Cli;
@@ -14,6 +15,7 @@ use itertools::Itertools;
 use log::*;
 use logger::logger_init;
 use serde::Serialize;
+use tap::Tap;
 
 #[derive(Serialize)]
 pub struct JenkinsPuppetHashVersion {
@@ -23,10 +25,10 @@ pub struct JenkinsPuppetHashVersion {
 fn group_by<Key, Value, F: Fn(&Value) -> Key>(
   grouping: F,
   xs: Vec<Value>,
-) -> HashMap<Key, Vec<Value>>
-  where Key: Eq, Key: Hash
+) -> BTreeMap<Key, Vec<Value>>
+  where Key: Eq, Key: Hash, Key: Ord
 {
-  let mut map: HashMap<Key, Vec<Value>> = HashMap::new();
+  let mut map: BTreeMap<Key, Vec<Value>> = BTreeMap::new();
   for item in xs {
     let key = grouping(&item);
     map.entry(key).or_default().push(item);
@@ -36,9 +38,9 @@ fn group_by<Key, Value, F: Fn(&Value) -> Key>(
 
 fn resolve<Key, Value, Sort: Fn(&Value, &Value) -> Ordering>(
   sort: Sort,
-  grouped: HashMap<Key, Vec<Value>>,
-) -> HashMap<Key, Value> where Key: Eq, Key: Hash {
-  let mut map: HashMap<Key, Value> = HashMap::new();
+  grouped: BTreeMap<Key, Vec<Value>>,
+) -> BTreeMap<Key, Value> where Key: Eq, Key: Hash, Key: Ord {
+  let mut map: BTreeMap<Key, Value> = BTreeMap::new();
   for (key, values) in grouped {
     let val = values
       .into_iter()
@@ -114,14 +116,11 @@ fn main() -> Result<(), AppError> {
     .collect::<Result<Vec<SatisfiedPackage>, AppError>>()
     ?;
   let packages = graph
+    .clone()
     .into_iter()
-    .map(|p| p.flatten())
+    .map(|pkg| pkg.flatten())
     .flatten()
     .collect::<Vec<FlatPackage>>()
-    // .map(|p| {
-    //   (p.name, JenkinsPuppetHashVersion { version: p.version, })
-    // })
-    // .collect::<HashMap<String, JenkinsPuppetHashVersion>>()
     ;
 
   let grouped = group_by(
@@ -134,11 +133,74 @@ fn main() -> Result<(), AppError> {
     grouped,
   );
 
-  let mut output_helper = HashMap::new();
-  output_helper.insert("jenkins::plugin_hash", &resolved);
+  let filtered = if cli.root_only {
+    info!("Filtering root packages...");
+    let all_dependencies = flatten_dependencies(&graph);
+    let filtered_dependencies = filter_referenced(&all_dependencies);
+    let flattened = filtered_dependencies
+      .iter()
+      .map(|p| FlatPackage {
+        name: p.name.clone(),
+        version: p.version.clone(),
+        digest_string: p.digest_string.clone(),
+        digest_type: p.digest_type.clone(),
+        pin: true,
+      })
+      .collect::<Vec<FlatPackage>>();
+    resolve(
+      |a, b| b.version.cmp(&a.version),
+      group_by(|pkg| pkg.name.clone(), flattened),
+    )
+  } else {
+    resolved
+  };
+
+  let mut output_helper = BTreeMap::new();
+  output_helper.insert("jenkins::plugin_hash", &filtered);
   let yaml = serde_yaml::to_string(&output_helper)
     .map_err(AppError::YamlSerializationError)
     ?;
   println!("{}", yaml);
   Ok(())
+}
+
+
+pub fn flatten_dependencies(
+  pkgs: &Vec<SatisfiedPackage>,
+) -> Vec<SatisfiedPackage> {
+  let mut seen = HashSet::new();
+  let mut result = Vec::new();
+  fn visit(
+    pkgs: &Vec<SatisfiedPackage>,
+    seen: &mut HashSet<String>,
+    result: &mut Vec<SatisfiedPackage>,
+  ) {
+    for pkg in pkgs {
+      for dep in &pkg.dependencies {
+        if seen.insert(dep.name.clone()) {
+          result.push(dep.clone());
+        }
+        visit(&pkg.dependencies, seen, result);
+      }
+    }
+  }
+  visit(pkgs, &mut seen, &mut result);
+  result
+}
+
+fn filter_referenced(packages: &Vec<SatisfiedPackage>) -> Vec<&SatisfiedPackage> {
+  let mut referenced = HashMap::new();
+  for pkg in packages {
+    for dep in &pkg.dependencies {
+      referenced.insert(dep.name.clone(), dep.clone());
+    }
+  }
+  packages
+    .iter()
+    .filter(|pkg| {
+      (!referenced.contains_key(&pkg.name)).tap(|result| {
+        info!("Package {} referenced? {}", pkg.name, result);
+      })
+    })
+    .collect()
 }

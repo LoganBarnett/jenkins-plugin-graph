@@ -1,4 +1,42 @@
-// We could've used the semver, if Jenkins Plugins used semver...
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_version_comparison_patch_and_no_patch() {
+
+    let version_a = JenkinsPluginVersion::parse("9.7-33.v4d23ef79fcc8").unwrap();
+    let version_b = JenkinsPluginVersion::parse("9.7.1-97.v4cc844130d97").unwrap();
+    assert!(version_a < version_b);
+  }
+
+  #[test]
+  fn test_version_comparison_majors_only() {
+    let version_a = JenkinsPluginVersion::parse("625.vd896b_f445a_f8").unwrap();
+    let version_b = JenkinsPluginVersion::parse("639.v6eca_cd8c04a_a_").unwrap();
+    assert!(version_a < version_b);
+    let version_a = JenkinsPluginVersion::parse("1873.vea_5814ca_9c93").unwrap();
+    let version_b = JenkinsPluginVersion::parse("1958.vddc0d369b_e16").unwrap();
+    assert!(version_a < version_b);
+  }
+
+  #[test]
+  fn test_parse_without_build_number() {
+    JenkinsPluginVersion::parse("2.1240.vca_710512d944").unwrap();
+  }
+
+  #[test]
+  fn version_round_trip() {
+    let versions = [
+      "392.v27a_482d90083",
+    ];
+    for version in versions {
+      let jpv = JenkinsPluginVersion::parse(version).unwrap();
+      assert_eq!(jpv.to_string(), version);
+    }
+  }
+
+}
 // They just use... whatever?  Let's just assume it's dotted segments, and we'll
 // do numeric comparisons.  That may not always be safe because some patch
 // versions are like "a" and "e", but whatever.
@@ -8,60 +46,49 @@ use log::*;
 
 use serde::{de::{self, Visitor}, Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::error::AppError;
+use crate::{base_version::BaseVersion, error::AppError};
 
 #[derive(Debug, Clone, Eq, PartialOrd, PartialEq)]
 pub struct JenkinsPluginVersion {
-  pub segments: Vec<String>,
+  pub base_version: BaseVersion,
+  pub build_number: Option<usize>,
+  pub git_hash: Option<String>,
 }
 
 impl JenkinsPluginVersion {
 
-  pub fn parse(s: &String) -> Result<Self, AppError> {
-    let segments = s
-      .split(".")
-      .into_iter()
-      .map(|s| s.to_string())
-      .collect::<Vec<String>>();
-    // TODO: Maybe validate more?
-    if Self::segments_valid(&segments) {
-      Ok(
-        JenkinsPluginVersion {
-          segments,
-        }
+  pub fn parse<S: AsRef<str>>(s: S) -> Result<Self, AppError> {
+    let parts: Vec<&str> = s.as_ref().split('-').collect();
+    let hashless_parts: Vec<&str> = parts[0].split(".v").collect();
+    let base_version = BaseVersion::parse(hashless_parts[0])?;
+    let build_number = if parts.len() == 2 {
+      let build_parts: Vec<&str> = parts[1].split(".v").collect();
+      Some(
+        build_parts[0]
+          .parse::<usize>()
+          .map_err(|e| {
+            AppError::VersionParseError(format!(
+              "Invalid build number in {}: {} - {}",
+              build_parts[0],
+              s.as_ref(),
+              e,
+            ))
+          })?,
       )
     } else {
-      Err(AppError::VersionParseError())
-    }
-  }
-
-  fn segments_valid(segments: &Vec<String>) -> bool {
-    segments.len() != 0
-  }
-
-  fn numeric_segments(&self) -> Vec<u64> {
-    self.segments
-      .iter()
-      .map(|segment| {
-        match segment.parse::<u64>() {
-          Ok(num) => num,
-          Err(_) => {
-            let (total, _) = segment
-              .chars()
-              .into_iter()
-              .fold((0 as u64, 0 as u64), |(acc, power), num | {
-                (
-                  acc + (
-                    num as u64 * (8 as u64).pow(power.try_into().unwrap())
-                  ),
-                  power + 1,
-                )
-              });
-            total
-          }
-        }
-      })
-      .collect::<Vec<u64>>()
+      None
+    };
+    let git_hash_parts: Vec<&str> = s.as_ref().split(".v").collect();
+    let git_hash: Option<String> = if git_hash_parts.len() == 2 {
+      Some(git_hash_parts[1].to_string())
+    } else {
+      None
+    };
+    Ok(JenkinsPluginVersion {
+      base_version,
+      build_number,
+      git_hash,
+    })
   }
 
 }
@@ -69,25 +96,24 @@ impl JenkinsPluginVersion {
 impl Ord for JenkinsPluginVersion {
 
   fn cmp(&self, other: &Self) -> Ordering {
-    self
-      .numeric_segments()
-      .into_iter()
-      .zip(other.numeric_segments())
-      .fold(Ordering::Equal, |acc, (a, b)| {
-        // Essentially, continue until we hit a non-equal segment.
-        if acc != Ordering::Equal {
-          acc
-        } else {
-          a.cmp(&b)
-        }
-      })
+    match self.base_version.cmp(&other.base_version) {
+      Ordering::Equal => self.build_number.cmp(&other.build_number),
+      ord => ord,
+    }
   }
+
+
 }
 
 impl Display for JenkinsPluginVersion {
 
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    f.write_str(&self.segments.join("."))
+    f.write_str(format!(
+      "{}{}{}",
+      self.base_version,
+      self.build_number.clone().map(|s| format!("-{}", s)).unwrap_or("".into()),
+      self.git_hash.clone().map(|s| format!(".v{}", s)).unwrap_or("".into()),
+    ).as_str())
   }
 
 }
@@ -107,7 +133,9 @@ impl<'de> Visitor<'de> for JenkinsPluginVersionVisitor {
   type Value = JenkinsPluginVersion;
 
   fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-    formatter.write_str("a string with dotted segments")
+    formatter.write_str(
+      "a string of format <version>-<build-number>.v<git-hash>",
+    )
   }
 
   fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
@@ -119,13 +147,6 @@ impl<'de> Visitor<'de> for JenkinsPluginVersionVisitor {
         error!("Somehow this is validating incorrect: {} {}", value, e);
         E::custom(format!("invalid value for JenkinsPluginVersion: {}", value))
       })
-    // Ok(Self::Value {
-    //   segments: value
-    //     .split(".")
-    //     .into_iter()
-    //     .map(|s| s.to_string())
-    //     .collect::<Vec<String>>()
-    // })
   }
 
   fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
@@ -141,7 +162,7 @@ impl Serialize for JenkinsPluginVersion {
   fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where S: Serializer,
   {
-    serializer.serialize_str(&self.segments.join("."))
+    serializer.serialize_str(&self.to_string())
   }
 
 }
